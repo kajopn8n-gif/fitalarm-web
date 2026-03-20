@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>FitAlarm Detector</title>
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #000; color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    overflow: hidden; width: 100vw; height: 100vh;
+    -webkit-user-select: none; user-select: none;
+  }
+  .cam { position: relative; width: 100%; height: 100%; }
+  .cam video, .cam canvas {
+    position: absolute; top: 0; left: 0;
+    width: 100%; height: 100%; object-fit: cover;
+  }
+  .cam video { transform: scaleX(-1); }
+  .cam canvas { transform: scaleX(-1); z-index: 2; }
+  .corner {
+    position: absolute; width: 28px; height: 28px;
+    border-color: #c8ff00; border-style: solid; border-width: 0; z-index: 3;
+  }
+  .corner.tl { top: 12px; left: 12px; border-top-width: 3px; border-left-width: 3px; border-radius: 4px 0 0 0; }
+  .corner.tr { top: 12px; right: 12px; border-top-width: 3px; border-right-width: 3px; border-radius: 0 4px 0 0; }
+  .corner.bl { bottom: 12px; left: 12px; border-bottom-width: 3px; border-left-width: 3px; border-radius: 0 0 0 4px; }
+  .corner.br { bottom: 12px; right: 12px; border-bottom-width: 3px; border-right-width: 3px; border-radius: 0 0 4px 0; }
+  .rep-flash {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    z-index: 10; font-size: 120px; font-weight: 800;
+    color: #c8ff00; text-shadow: 0 0 60px rgba(200,255,0,0.4);
+    opacity: 0; pointer-events: none;
+  }
+  .rep-flash.show { opacity: 1; animation: pop 0.4s ease; }
+  @keyframes pop {
+    0% { transform: translate(-50%,-50%) scale(0.5); opacity: 0; }
+    50% { transform: translate(-50%,-50%) scale(1.15); opacity: 1; }
+    100% { transform: translate(-50%,-50%) scale(1); opacity: 1; }
+  }
+  .countdown {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    z-index: 20; background: rgba(0,0,0,0.85);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  }
+  .countdown.hidden { display: none; }
+  .countdown-num { font-size: 100px; font-weight: 800; color: #c8ff00; animation: pulse 1s ease infinite; }
+  .countdown-tip { font-size: 16px; font-weight: 500; color: #888; text-align: center; padding: 0 24px; }
+  @keyframes pulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.08); opacity: 0.85; } }
+  .loading {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    z-index: 30; background: #000;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px;
+  }
+  .loading.hidden { display: none; }
+  .spinner {
+    width: 48px; height: 48px; border: 3px solid #222;
+    border-top-color: #c8ff00; border-radius: 50%; animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-text { font-size: 14px; color: #888; }
+  .bar-track { width: 200px; height: 4px; background: #222; border-radius: 2px; overflow: hidden; }
+  .bar-fill { height: 100%; background: #c8ff00; width: 0%; transition: width 0.3s; border-radius: 2px; }
+  .feedback {
+    position: absolute; bottom: 0; left: 0; width: 100%; z-index: 5;
+    background: rgba(0,0,0,0.75); padding: 10px 16px;
+    font-size: 13px; color: #888; text-align: center;
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  }
+  .feedback.good { color: #c8ff00; }
+  .feedback.warn { color: #ff8a00; }
+  .tap-fb {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    z-index: 25; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+    background: rgba(0,0,0,0.7);
+  }
+  .tap-fb.hidden { display: none; }
+  .tap-btn {
+    width: 140px; height: 140px; border-radius: 50%;
+    border: 3px solid #c8ff00; background: rgba(200,255,0,0.1);
+    color: #c8ff00; font-size: 48px; font-weight: 800;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
+  }
+  .tap-btn:active { background: rgba(200,255,0,0.25); transform: scale(0.95); }
+  .tap-hint { color: #888; font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="cam">
+  <video id="video" playsinline autoplay muted></video>
+  <canvas id="canvas"></canvas>
+  <div class="corner tl"></div><div class="corner tr"></div>
+  <div class="corner bl"></div><div class="corner br"></div>
+  <div class="rep-flash" id="repFlash">0</div>
+  <div class="countdown hidden" id="countdown">
+    <div class="countdown-num" id="countdownNum">3</div>
+    <div class="countdown-tip" id="countdownTip"></div>
+  </div>
+  <div class="feedback" id="feedback">Initializing...</div>
+</div>
+<div class="loading" id="loadingScreen">
+  <div class="spinner"></div>
+  <div class="loading-text" id="loadingText">Loading AI model...</div>
+  <div class="bar-track"><div class="bar-fill" id="loadingBar"></div></div>
+</div>
+<div class="tap-fb hidden" id="tapFallback">
+  <div class="tap-btn" id="tapBtn">0</div>
+  <div class="tap-hint">AI unavailable — tap to count reps</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.min.js"></script>
+
+<script>
+var params = new URLSearchParams(window.location.search);
+var EXERCISE = (params.get('exercise') || 'pushups').toLowerCase().replace(/[\s-]+/g, '');
+var TARGET_REPS = parseInt(params.get('target') || '10', 10);
+
+function send(msg) {
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage(JSON.stringify(msg), '*');
+    }
+    if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+      window.ReactNativeWebView.postMessage(JSON.stringify(msg));
+    }
+  } catch(e) {}
+}
+
+var repCount = 0, isRunning = false, isCounting = false, detector = null;
+var video, canvas, ctx, animFrameId = null;
+var exerciseState = 'idle', stateHoldFrames = 0, DEBOUNCE_FRAMES = 7;
+var lastRepTime = 0, REP_COOLDOWN_MS = 500, consecutiveNullFrames = 0;
+var SMOOTH_SIZE = 5, angleBuffers = {};
+
+var LS=5,RS=6,LE=7,RE=8,LW=9,RW=10,LH=11,RH=12,LK=13,RK=14,LA=15,RA=16;
+var SKELETON=[[LS,RS],[LS,LE],[LE,LW],[RS,RE],[RE,RW],[LS,LH],[RS,RH],[LH,RH],[LH,LK],[LK,LA],[RH,RK],[RK,RA]];
+
+function ang(a,b,c){var r=Math.atan2(c.y-b.y,c.x-b.x)-Math.atan2(a.y-b.y,a.x-b.x);var d=Math.abs(r*180/Math.PI);return d>180?360-d:d;}
+function dst(a,b){return Math.sqrt((a.x-b.x)**2+(a.y-b.y)**2);}
+function md(a,b){return{x:(a.x+b.x)/2,y:(a.y+b.y)/2,score:Math.min(a.score,b.score)};}
+function ok(p,t){return p&&p.score>(t||0.4);}
+function sm(val,key){if(!angleBuffers[key])angleBuffers[key]=[];angleBuffers[key].push(val);if(angleBuffers[key].length>SMOOTH_SIZE)angleBuffers[key].shift();var s=[].concat(angleBuffers[key]).sort(function(a,b){return a-b;});return s[Math.floor(s.length/2)];}
+
+function bestSide(kps,l,r){
+  var la=kps[l[0]],lb=kps[l[1]],lc=kps[l[2]],ra=kps[r[0]],rb=kps[r[1]],rc=kps[r[2]];
+  var lo=ok(la)&&ok(lb)&&ok(lc),ro=ok(ra)&&ok(rb)&&ok(rc);
+  if(lo&&ro)return Math.min(la.score,lb.score,lc.score)>=Math.min(ra.score,rb.score,rc.score)?ang(la,lb,lc):ang(ra,rb,rc);
+  if(lo)return ang(la,lb,lc);if(ro)return ang(ra,rb,rc);return null;
+}
+function getBestMid(kps,li,ri){var l=kps[li],r=kps[ri];if(ok(l)&&ok(r))return md(l,r);if(ok(l))return l;if(ok(r))return r;return null;}
+function res(phase,fb,raw){return{phase:phase,feedback:fb,rawAngle:raw};}
+
+function detectExercise(kps){
+  if(EXERCISE==='pushups'){var raw=bestSide(kps,[LS,LE,LW],[RS,RE,RW]);if(raw===null)return res(null,'Position sideways',0);var a=sm(raw,'pu');if(a<85)return res('down','Down ✓',a);if(a>155)return res('up','Up ✓',a);return res(null,'Moving...',a);}
+  if(EXERCISE==='squats'){var raw=bestSide(kps,[LH,LK,LA],[RH,RK,RA]);if(raw===null)return res(null,'Position sideways',0);var a=sm(raw,'sq');if(a<95)return res('down','Down ✓',a);if(a>165)return res('up','Up ✓',a);return res(null,'Moving...',a);}
+  if(EXERCISE==='crunches'||EXERCISE==='situps'){var sh=getBestMid(kps,LS,RS),hp=getBestMid(kps,LH,RH),kn=getBestMid(kps,LK,RK);if(!sh||!hp||!kn)return res(null,'Lie sideways',0);var raw=ang(sh,hp,kn),a=sm(raw,'cr');if(a<60)return res('up','Up ✓',a);if(a>130)return res('down','Down ✓',a);return res(null,'Moving...',a);}
+  if(EXERCISE==='jumpingjacks'){var lS=kps[LS],rS=kps[RS],lW2=kps[LW],rW2=kps[RW],lH2=kps[LH],rH2=kps[RH],lA2=kps[LA],rA2=kps[RA];if(!ok(lS)||!ok(rS)||!ok(lW2)||!ok(rW2))return res(null,'Face camera',0);var la2=ok(lH2)?ang(lH2,lS,lW2):null,ra2=ok(rH2)?ang(rH2,rS,rW2):null;var avg=(la2!==null&&ra2!==null)?(la2+ra2)/2:(la2||ra2||0);var sA=sm(avg,'jja');var sw=dst(lS,rS),lr=0;if(ok(lA2)&&ok(rA2))lr=dst(lA2,rA2)/sw;var sL=sm(lr,'jjl');if(sA>135&&sL>1.4)return res('up','Open ✓',sA);if(sA<45&&sL<0.85)return res('down','Close ✓',sA);return res(null,'Moving...',sA);}
+  return res(null,'Unknown exercise',0);
+}
+
+function processRepState(phase){
+  if(!isCounting)return false;
+  if(phase===null){consecutiveNullFrames++;if(consecutiveNullFrames>15)stateHoldFrames=0;return false;}
+  consecutiveNullFrames=0;
+  if(phase===exerciseState){stateHoldFrames=0;return false;}
+  stateHoldFrames++;
+  if(stateHoldFrames<DEBOUNCE_FRAMES)return false;
+  var now=Date.now();
+  if(now-lastRepTime<REP_COOLDOWN_MS){stateHoldFrames=0;return false;}
+  stateHoldFrames=0;var prev=exerciseState;exerciseState=phase;
+  if(prev==='idle')return false;
+  var ct=(EXERCISE==='crunches'||EXERCISE==='situps')?(prev==='up'&&phase==='down'):(prev==='down'&&phase==='up');
+  if(ct){lastRepTime=now;return true;}
+  return false;
+}
+
+function onRepCounted(){
+  repCount++;flashRep();
+  send({type:'rep',count:repCount,target:TARGET_REPS,exercise:EXERCISE});
+  if(repCount>=TARGET_REPS){isCounting=false;isRunning=false;if(animFrameId)cancelAnimationFrame(animFrameId);setFb('Complete! ✅',true);send({type:'complete',count:repCount,exercise:EXERCISE});}
+}
+
+function drawSkeleton(kps){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  var c=isCounting?'200,255,0':'100,100,120';
+  ctx.lineWidth=3;ctx.lineCap='round';
+  for(var s=0;s<SKELETON.length;s++){var a=kps[SKELETON[s][0]],b=kps[SKELETON[s][1]];if(a.score>0.3&&b.score>0.3){ctx.strokeStyle='rgba('+c+','+Math.min(a.score,b.score)+')';ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}}
+  for(var i=0;i<kps.length;i++){var p=kps[i];if(p.score>0.3){ctx.fillStyle='rgba('+c+','+p.score+')';ctx.beginPath();ctx.arc(p.x,p.y,5,0,Math.PI*2);ctx.fill();ctx.fillStyle='#000';ctx.beginPath();ctx.arc(p.x,p.y,2,0,Math.PI*2);ctx.fill();}}
+}
+
+async function detectFrame(){
+  if(!isRunning||!detector)return;
+  try{
+    var poses=await detector.estimatePoses(video,{flipHorizontal:false});
+    if(poses.length>0){
+      var kps=poses[0].keypoints;
+      var sx=canvas.width/video.videoWidth,sy=canvas.height/video.videoHeight;
+      var scaled=kps.map(function(k){return{name:k.name,score:k.score,x:k.x*sx,y:k.y*sy};});
+      drawSkeleton(scaled);
+      var r=detectExercise(kps);
+      if(processRepState(r.phase))onRepCounted();
+      setFb(r.feedback,r.phase!==null&&isCounting);
+    }else{ctx.clearRect(0,0,canvas.width,canvas.height);setFb('No person detected',false);}
+  }catch(e){console.error(e);}
+  animFrameId=requestAnimationFrame(detectFrame);
+}
+
+function flashRep(){var el=document.getElementById('repFlash');el.textContent=repCount;el.classList.remove('show');void el.offsetWidth;el.classList.add('show');setTimeout(function(){el.classList.remove('show');},800);}
+function setFb(t,g){var fb=document.getElementById('feedback');fb.textContent=t;fb.className='feedback'+(g?' good':t.indexOf('No person')>=0?' warn':'');}
+function setLoad(t,p){document.getElementById('loadingText').textContent=t;document.getElementById('loadingBar').style.width=p+'%';}
+
+function startCountdown(){
+  return new Promise(function(resolve){
+    var ov=document.getElementById('countdown'),nm=document.getElementById('countdownNum'),tp=document.getElementById('countdownTip');
+    ov.classList.remove('hidden');
+    var tips={pushups:'Position sideways for push-ups',squats:'Stand sideways, feet shoulder-width',crunches:'Lie sideways, knees bent',situps:'Lie sideways, knees bent',jumpingjacks:'Face camera, full body visible'};
+    tp.textContent=tips[EXERCISE]||tips.pushups;
+    var c=3;nm.textContent=c;
+    var iv=setInterval(function(){c--;if(c>0){nm.textContent=c;}else{nm.textContent='GO!';tp.textContent='';clearInterval(iv);setTimeout(function(){ov.classList.add('hidden');resolve();},600);}},1000);
+  });
+}
+
+function activateFallbackTap(){
+  document.getElementById('loadingScreen').classList.add('hidden');
+  document.getElementById('tapFallback').classList.remove('hidden');
+  var btn=document.getElementById('tapBtn');btn.textContent=repCount;
+  btn.addEventListener('click',function(){
+    if(repCount>=TARGET_REPS)return;repCount++;btn.textContent=repCount;
+    send({type:'rep',count:repCount,target:TARGET_REPS,exercise:EXERCISE});
+    if(repCount>=TARGET_REPS){send({type:'complete',count:repCount,exercise:EXERCISE});btn.style.borderColor='#4ade80';btn.style.color='#4ade80';}
+  });
+  send({type:'fallback',reason:'AI model failed to load'});
+}
+
+async function init(){
+  send({type:'init',exercise:EXERCISE,target:TARGET_REPS});
+  video=document.getElementById('video');canvas=document.getElementById('canvas');ctx=canvas.getContext('2d');
+  setLoad('Starting camera...',10);
+  try{
+    var stream;
+    try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:640},height:{ideal:480}}});}
+    catch(e){stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:640},height:{ideal:480}}});}
+    video.srcObject=stream;await video.play();canvas.width=video.videoWidth;canvas.height=video.videoHeight;
+    send({type:'camera_ready'});
+  }catch(err){send({type:'error',message:'Camera: '+err.message});setLoad('Camera error',0);setTimeout(activateFallbackTap,1500);return;}
+
+  setLoad('Initializing AI...',25);
+  try{
+    try{await tf.setBackend('webgl');await tf.ready();}catch(e){try{await tf.setBackend('wasm');await tf.ready();}catch(e2){await tf.setBackend('cpu');await tf.ready();}}
+    send({type:'status',message:'TF: '+tf.getBackend()});
+    setLoad('Loading MoveNet...',50);
+    detector=await poseDetection.createDetector(poseDetection.SupportedModels.MoveNet,{modelType:poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING});
+    setLoad('Warming up...',80);
+    for(var i=0;i<5;i++)await detector.estimatePoses(video,{flipHorizontal:false});
+    setLoad('Ready!',100);send({type:'model_ready',backend:tf.getBackend()});
+  }catch(err){console.error(err);send({type:'error',message:'Model: '+err.message});activateFallbackTap();return;}
+
+  setTimeout(function(){document.getElementById('loadingScreen').classList.add('hidden');},300);
+  isRunning=true;isCounting=false;exerciseState='idle';angleBuffers={};stateHoldFrames=0;consecutiveNullFrames=0;
+  detectFrame();
+  await startCountdown();
+  isCounting=true;send({type:'counting_started'});
+}
+
+window.addEventListener('load',function(){setTimeout(init,300);});
+window.addEventListener('message',function(e){try{var msg=JSON.parse(e.data);if(msg.type==='stop'){isRunning=false;isCounting=false;if(animFrameId)cancelAnimationFrame(animFrameId);if(video&&video.srcObject)video.srcObject.getTracks().forEach(function(t){t.stop();});}}catch(err){}});
+</script>
+</body>
+</html>
